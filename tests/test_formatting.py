@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 from usage_monitor_for_claude.formatting import (
     PERIOD_5H, PERIOD_7D,
-    elapsed_pct, expand_popup_fields, field_period, format_credits, format_tooltip,
+    elapsed_pct, expand_popup_fields, field_period, format_credits, format_energy, format_tooltip,
     midnight_positions, parse_field_name, popup_label, time_until, tooltip_label,
 )
 from usage_monitor_for_claude.i18n import LOCALE_DIR
@@ -864,6 +864,26 @@ class TestFormatCredits(unittest.TestCase):
     def test_zero_cents(self, mock_currency):
         """Zero cents formats correctly."""
         self.assertEqual(format_credits(0.0), '$0.00')
+
+
+class TestFormatEnergy(unittest.TestCase):
+    """Tests for format_energy()."""
+
+    def test_zero(self):
+        self.assertEqual(format_energy(0.0), '0.0 Wh')
+
+    def test_sub_ten_uses_one_decimal(self):
+        self.assertEqual(format_energy(4.2), '4.2 Wh')
+
+    def test_ten_to_below_1000_uses_whole_watt_hours(self):
+        self.assertEqual(format_energy(12.4), '12 Wh')
+        self.assertEqual(format_energy(999.9), '1000 Wh')
+
+    def test_at_1000_switches_to_kwh(self):
+        self.assertEqual(format_energy(1000.0), '1.00 kWh')
+
+    def test_large_kwh(self):
+        self.assertEqual(format_energy(48700.0), '48.70 kWh')
 
 
 if __name__ == '__main__':

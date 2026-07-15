@@ -15,7 +15,7 @@ from .i18n import T
 from .settings import CURRENCY_SYMBOL, TOOLTIP_FIELDS, _SYSTEM_CURRENCY_SYMBOL
 
 __all__ = [
-    'elapsed_pct', 'expand_popup_fields', 'field_period', 'format_credits', 'format_tooltip',
+    'elapsed_pct', 'expand_popup_fields', 'field_period', 'format_credits', 'format_energy', 'format_tooltip',
     'midnight_positions', 'parse_field_name', 'popup_label', 'time_until', 'tooltip_label',
 ]
 
@@ -327,6 +327,21 @@ def format_credits(cents: float) -> str:
         if CURRENCY_SYMBOL:
             return f'{CURRENCY_SYMBOL}\u00a0{amount:.2f}'
         return f'{amount:.2f}'
+
+
+def format_energy(watt_hours: float) -> str:
+    """Format an estimated Wh figure, switching to kWh above 1000 Wh.
+
+    Parameters
+    ----------
+    watt_hours : float
+        Estimated energy in watt-hours.
+    """
+    if watt_hours >= 1000:
+        return f'{watt_hours / 1000:.2f} kWh'
+    if watt_hours >= 10:
+        return f'{watt_hours:.0f} Wh'
+    return f'{watt_hours:.1f} Wh'
 
 
 def format_tooltip(data: dict[str, Any]) -> str:

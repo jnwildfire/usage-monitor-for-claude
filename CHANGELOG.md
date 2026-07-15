@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Estimated energy section in the popup, showing electricity use for the current week and month. Computed from token counts already logged locally by Claude Code (`~/.claude/projects/**/*.jsonl`) - a different, local-only data source from the OAuth usage API, which has no token counts, only quota percentages. Anthropic does not publish a per-token energy figure, so this is an order-of-magnitude estimate using configurable Wh/1K-token rates; see [docs/energy-estimate.md](docs/energy-estimate.md) for the methodology. Disable with `"energy_enabled": false`
+
 [Show all code changes](https://github.com/jens-duttke/usage-monitor-for-claude/compare/v1.15.0...HEAD)
 
 ## [1.15.0] - 2026-05-01

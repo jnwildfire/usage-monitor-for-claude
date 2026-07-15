@@ -24,6 +24,10 @@ function init(config) {
     document.getElementById('labelPlan').textContent = translations.plan;
     document.getElementById('headingUsage').textContent = translations.usage;
     document.getElementById('headingExtraUsage').textContent = translations.extra_usage;
+    document.getElementById('headingEnergy').textContent = translations.energy;
+    document.getElementById('labelEnergyWeek').textContent = translations.energy_week;
+    document.getElementById('labelEnergyMonth').textContent = translations.energy_month;
+    document.getElementById('energyHint').textContent = translations.energy_hint;
     document.getElementById('headingClaudeCode').textContent = translations.claude_code;
 
     const changelogLink = document.getElementById('changelogLink');
@@ -45,6 +49,9 @@ function init(config) {
         extraSpent: document.getElementById('extraSpent'),
         extraPct: document.getElementById('extraPct'),
         extraFill: document.getElementById('extraFill'),
+        energySection: document.getElementById('energySection'),
+        energyWeekValue: document.getElementById('energyWeekValue'),
+        energyMonthValue: document.getElementById('energyMonthValue'),
         installSection: document.getElementById('installSection'),
         installRows: document.getElementById('installRows'),
         statusSection: document.getElementById('statusSection'),
@@ -82,6 +89,13 @@ function updateData(data) {
         els.extraSpent.textContent = data.extra.spent_text;
         els.extraPct.textContent = data.extra.pct_text;
         els.extraFill.style.width = `${data.extra.fill_pct * 100}%`;
+    }
+
+    const hasEnergy = !!data.energy;
+    els.energySection.classList.toggle('visible', hasEnergy);
+    if (hasEnergy) {
+        els.energyWeekValue.textContent = data.energy.week_text;
+        els.energyMonthValue.textContent = data.energy.month_text;
     }
 
     const hasInstalls = !!data.installations?.length;

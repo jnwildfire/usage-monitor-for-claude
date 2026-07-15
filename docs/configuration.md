@@ -151,6 +151,23 @@ Run a shell command when a usage event occurs. See [Event Commands](event-comman
 |-----|---------|-------------|
 | `language` | *(auto-detected)* | Override the UI language with a language code. Available: `de`, `en`, `es`, `fr`, `hi`, `id`, `it`, `ja`, `ko`, `pt-BR`, `uk`, `zh-CN`, `zh-TW` |
 
+## Energy estimate
+
+The popup shows an estimated electricity figure for the current week and month, computed from local token counts logged by Claude Code (not from the OAuth usage API, which has no token data). This is a rough order-of-magnitude estimate, not a measurement - see [Energy Estimate](energy-estimate.md) for the full methodology and where the default rates come from.
+
+| Key | Default | Description |
+|-----|---------|--------------|
+| `energy_enabled` | `true` | Set to `false` to hide the energy section and skip scanning transcripts entirely |
+| `energy_wh_per_1k_output_tokens` | `0.4` | Estimated Wh per 1000 output (generated) tokens |
+| `energy_wh_per_1k_input_tokens` | `0.05` | Estimated Wh per 1000 fresh input/cache-write tokens |
+| `energy_wh_per_1k_cache_read_tokens` | `0.005` | Estimated Wh per 1000 cache-read tokens |
+
+```json
+{
+    "energy_wh_per_1k_output_tokens": 0.3
+}
+```
+
 ## Currency
 
 The Anthropic API does not include currency information, so the app detects the currency symbol from your Windows locale settings. If your Windows locale currency differs from the currency Anthropic bills you in, you can override just the symbol here. Number formatting (decimal separator, symbol position) always follows your system locale.

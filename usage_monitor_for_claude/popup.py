@@ -21,9 +21,16 @@ import webview  # type: ignore[import-untyped]  # no type stubs available
 
 from . import __version__
 from .claude_cli import CHANGELOG_URL, find_installations
-from .formatting import elapsed_pct, expand_popup_fields, field_period, format_credits, midnight_positions, popup_label, time_until
+from .energy import energy_summary
+from .formatting import (
+    elapsed_pct, expand_popup_fields, field_period, format_credits, format_energy, midnight_positions, popup_label,
+    time_until,
+)
 from .i18n import T
-from .settings import BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_WARN, BAR_MARKER, BG, FG, FG_DIM, FG_HEADING, FG_LINK, POPUP_FIELDS
+from .settings import (
+    BAR_BG, BAR_DIVIDER, BAR_FG, BAR_FG_WARN, BAR_MARKER, BG, ENERGY_ENABLED, FG, FG_DIM, FG_HEADING, FG_LINK,
+    POPUP_FIELDS,
+)
 
 _POPUP_DIR = Path(__file__).parent / 'popup'
 _BASELINE_DPI = 96
@@ -114,6 +121,15 @@ def _snapshot_to_dict(
                     ),
                 }
 
+    # Energy estimate (from local transcript token counts, not the OAuth usage API)
+    energy = None
+    if ENERGY_ENABLED:
+        summary = energy_summary()
+        energy = {
+            'week_text': format_energy(summary['week_wh']),
+            'month_text': format_energy(summary['month_wh']),
+        }
+
     # Installations
     if installations is None:
         installations = [{'name': i.name, 'version': i.version} for i in find_installations()]
@@ -136,6 +152,7 @@ def _snapshot_to_dict(
         'profile': profile,
         'usage': usage,
         'extra': extra,
+        'energy': energy,
         'installations': installations,
         'status': status,
     }
@@ -151,6 +168,8 @@ def _init_config(snap: CacheSnapshot, next_poll_time: float | None = None) -> di
         't': {
             'title': T['popup_title'], 'account': T['account'], 'email': T['email'], 'plan': T['plan'],
             'usage': T['usage'], 'extra_usage': T['extra_usage'],
+            'energy': T['energy'], 'energy_week': T['energy_week'], 'energy_month': T['energy_month'],
+            'energy_hint': T['energy_hint'],
             'claude_code': T['claude_code'], 'changelog': T['changelog'],
             'status_updated_s': T['status_updated_s'], 'status_updated': T['status_updated'],
             'status_next_update': T['status_next_update'], 'status_refreshing': T['status_refreshing'],

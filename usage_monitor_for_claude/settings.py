@@ -27,6 +27,8 @@ __all__ = [
     'ALERT_TIME_AWARE', 'ALERT_TIME_AWARE_BELOW',
     'BAR_BG', 'BAR_FG', 'BAR_FG_WARN', 'BAR_MARKER', 'BG',
     'CURRENCY_SYMBOL',
+    'ENERGY_ENABLED', 'ENERGY_WH_PER_1K_CACHE_READ_TOKENS', 'ENERGY_WH_PER_1K_INPUT_TOKENS',
+    'ENERGY_WH_PER_1K_OUTPUT_TOKENS',
     'FG', 'FG_DIM', 'FG_HEADING', 'FG_LINK',
     'ICON_DARK', 'ICON_FIELDS', 'ICON_LIGHT', 'IDLE_PAUSE',
     'LANGUAGE', 'MAX_BACKOFF',
@@ -52,7 +54,10 @@ _THRESHOLD_KEY_PREFIX = 'alert_thresholds_'
 _PERCENT_KEYS = frozenset({'alert_time_aware_below'})
 _STRING_KEYS = frozenset({'currency_symbol', 'language'})
 _COMMAND_KEYS = frozenset({'on_reset_command', 'on_startup_command', 'on_threshold_command'})
-_BOOL_KEYS = frozenset({'alert_time_aware'})
+_BOOL_KEYS = frozenset({'alert_time_aware', 'energy_enabled'})
+_NON_NEGATIVE_FLOAT_KEYS = frozenset({
+    'energy_wh_per_1k_input_tokens', 'energy_wh_per_1k_output_tokens', 'energy_wh_per_1k_cache_read_tokens',
+})
 _STRING_LIST_KEYS = frozenset({'tooltip_fields'})
 _WILDCARD_STRING_LIST_KEYS = frozenset({'popup_fields'})
 _VALID_BAR_MODES = frozenset({'utilization', 'overage'})
@@ -162,6 +167,14 @@ def _validate(data: dict, path: Path) -> dict:
         elif key in _BOOL_KEYS:
             if not isinstance(value, bool):
                 errors.append(f'  {key}: expected true or false, got {type(value).__name__}')
+                drop.append(key)
+
+        elif key in _NON_NEGATIVE_FLOAT_KEYS:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                errors.append(f'  {key}: expected a number, got {type(value).__name__}')
+                drop.append(key)
+            elif value < 0:
+                errors.append(f'  {key}: must be >= 0, got {value}')
                 drop.append(key)
 
         elif key in _STRING_LIST_KEYS:
@@ -312,6 +325,12 @@ CURRENCY_SYMBOL: str = _S.get('currency_symbol', _SYSTEM_CURRENCY_SYMBOL)
 
 # Language override
 LANGUAGE: str = _S.get('language', '')
+
+# Energy estimate (see docs/energy-estimate.md for where the defaults come from)
+ENERGY_ENABLED: bool = _S.get('energy_enabled', True)
+ENERGY_WH_PER_1K_INPUT_TOKENS: float = _S.get('energy_wh_per_1k_input_tokens', 0.05)
+ENERGY_WH_PER_1K_OUTPUT_TOKENS: float = _S.get('energy_wh_per_1k_output_tokens', 0.4)
+ENERGY_WH_PER_1K_CACHE_READ_TOKENS: float = _S.get('energy_wh_per_1k_cache_read_tokens', 0.005)
 
 # Event commands
 ON_RESET_COMMAND: list[str] = _S.get('on_reset_command', [])
