@@ -447,23 +447,46 @@ class UsagePopup:
             Logical (x, y) coordinates.  Callers that need physical pixels
             must multiply by the DPI scale factor.
         """
-        work_area = ctypes.wintypes.RECT()
-        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(work_area), 0)
+        # Find the monitor that owns the system tray (Shell_TrayWnd).
+        # SPI_GETWORKAREA only covers the primary monitor and mis-positions
+        # the popup when the primary is not at virtual (0,0) — e.g. monitors
+        # to the left make work_area.left > 0, which the old code read as
+        # "taskbar is on the left" even when the taskbar is at the bottom.
+        class _MONITORINFO(ctypes.Structure):
+            _fields_ = [('cbSize', ctypes.wintypes.DWORD),
+                        ('rcMonitor', ctypes.wintypes.RECT),
+                        ('rcWork', ctypes.wintypes.RECT),
+                        ('dwFlags', ctypes.wintypes.DWORD)]
+
+        tray_hwnd = ctypes.windll.user32.FindWindowW('Shell_TrayWnd', None)
+        tray_pt = ctypes.wintypes.POINT(0, 0)
+        if tray_hwnd:
+            r = ctypes.wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(tray_hwnd, ctypes.byref(r))
+            tray_pt.x = (r.left + r.right) // 2
+            tray_pt.y = (r.top + r.bottom) // 2
+
+        hmon = ctypes.windll.user32.MonitorFromPoint(tray_pt, 2)  # MONITOR_DEFAULTTONEAREST
+        mi = _MONITORINFO()
+        mi.cbSize = ctypes.sizeof(_MONITORINFO)
+        ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi))
+        mon = mi.rcMonitor
+        work = mi.rcWork
 
         dpi = ctypes.windll.user32.GetDpiForWindow(self._popup_hwnd) or ctypes.windll.user32.GetDpiForSystem()
         scale = dpi / _BASELINE_DPI
-
         margin = 12
 
-        if work_area.left > 0:
-            x = work_area.left + margin
+        # Detect taskbar edge by comparing work area to full monitor bounds.
+        if work.left > mon.left:
+            x = work.left + margin
         else:
-            x = work_area.right - physical_width - margin
+            x = work.right - physical_width - margin
 
-        if work_area.top > 0:
-            y = work_area.top + margin
+        if work.top > mon.top:
+            y = work.top + margin
         else:
-            y = work_area.bottom - physical_height - margin
+            y = work.bottom - physical_height - margin
 
         return int(x / scale), int(y / scale)
 
@@ -473,16 +496,14 @@ class UsagePopup:
         The first call happens while the window is still transparent
         (opacity 0), so separate resize/move calls cause no visible jump.
 
-        pywebview's ``resize()`` calls ``SetWindowPos`` directly without
-        DPI scaling, so it expects physical pixels.  The *height* from JS
-        ``ResizeObserver`` is in CSS pixels, so we multiply by the window's
-        current DPI factor.  ``move()`` scales internally, and
-        ``_tray_position`` already accounts for that.
+        pywebview 6.x resize() and move() both multiply by _scale internally,
+        so both receive logical pixels.  We still compute physical dimensions
+        here to pass to _tray_position for screen-edge arithmetic.
         """
         dpi = ctypes.windll.user32.GetDpiForWindow(self._popup_hwnd) or ctypes.windll.user32.GetDpiForSystem()
         scale = dpi / _BASELINE_DPI
         physical_width = int(self.WIDTH * scale)
         physical_height = int(height * scale)
-        self._window.resize(physical_width, physical_height)
+        self._window.resize(self.WIDTH, height)  # logical px; pywebview scales internally
         x, y = self._tray_position(physical_width, physical_height)
         self._window.move(x, y)
