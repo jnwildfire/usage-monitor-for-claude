@@ -7,6 +7,8 @@ and _init_config.
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -512,6 +514,46 @@ class TestInitConfig(unittest.TestCase):
 # _tray_position
 # ---------------------------------------------------------------------------
 
+class _MonitorInfoLayout(ctypes.Structure):
+    """Layout-compatible stand-in for the ``_MONITORINFO`` struct defined locally inside _tray_position.
+
+    ctypes casts by memory layout, not Python identity, so a struct with
+    the same fields in the same order can be used to read/write through a
+    pointer produced by the real (nested) class - the same trick the
+    existing RECT-pointer mocks below already rely on.
+    """
+
+    _fields_ = [('cbSize', ctypes.wintypes.DWORD),
+                ('rcMonitor', ctypes.wintypes.RECT),
+                ('rcWork', ctypes.wintypes.RECT),
+                ('dwFlags', ctypes.wintypes.DWORD)]
+
+
+def _monitor_info_stub(work_rect, mon_rect=None):
+    """Build a GetMonitorInfoW side_effect that fills in the given work/monitor rects.
+
+    Parameters
+    ----------
+    work_rect : tuple[int, int, int, int]
+        ``(left, top, right, bottom)`` of the work area (excludes the taskbar).
+    mon_rect : tuple[int, int, int, int] or None
+        Full monitor bounds. Defaults to a monitor at the virtual origin
+        with the same outer edges as the work area (no taskbar, single
+        primary monitor) - the assumption the old SPI_GETWORKAREA-based
+        code silently made.
+    """
+    if mon_rect is None:
+        mon_rect = (0, 0, work_rect[2], work_rect[3])
+
+    def stub(_hmon, mi_ptr):
+        mi = ctypes.cast(mi_ptr, ctypes.POINTER(_MonitorInfoLayout)).contents
+        mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom = mon_rect
+        mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom = work_rect
+        return 1
+
+    return stub
+
+
 class TestTrayPosition(unittest.TestCase):
     """Tests for UsagePopup._tray_position - popup placement near the tray.
 
@@ -520,22 +562,24 @@ class TestTrayPosition(unittest.TestCase):
     It returns logical coordinates suitable for pywebview's move().
     """
 
-    def _call(self, work_left, work_top, work_right, work_bottom, dpi, physical_width, physical_height):
-        """Call _tray_position without constructing a full UsagePopup."""
+    def _call(
+        self, work_left, work_top, work_right, work_bottom, dpi, physical_width, physical_height,
+        mon_rect=None,
+    ):
+        """Call _tray_position without constructing a full UsagePopup.
+
+        FindWindowW returns 0 (tray window "not found") by default, so
+        MonitorFromPoint is called with the origin - which monitor it
+        resolves to doesn't matter here since GetMonitorInfoW is stubbed
+        to always return the given rects regardless of the handle.
+        """
         popup = object.__new__(UsagePopup)
         popup._popup_hwnd = 12345
+        work_rect = (work_left, work_top, work_right, work_bottom)
 
-        def set_rect(_code, _size, rect_ptr, _flags):
-            import ctypes
-            import ctypes.wintypes
-            rect = ctypes.cast(rect_ptr, ctypes.POINTER(ctypes.wintypes.RECT)).contents
-            rect.left = work_left
-            rect.top = work_top
-            rect.right = work_right
-            rect.bottom = work_bottom
-            return 1
-
-        with patch('ctypes.windll.user32.SystemParametersInfoW', side_effect=set_rect), \
+        with patch('ctypes.windll.user32.FindWindowW', return_value=0), \
+             patch('ctypes.windll.user32.MonitorFromPoint', return_value=1), \
+             patch('ctypes.windll.user32.GetMonitorInfoW', side_effect=_monitor_info_stub(work_rect, mon_rect)), \
              patch('ctypes.windll.user32.GetDpiForWindow', return_value=dpi):
             return popup._tray_position(physical_width, physical_height)
 
@@ -568,13 +612,13 @@ class TestTrayPosition(unittest.TestCase):
         self.assertEqual(y, expected_y)
 
     def test_taskbar_on_left(self):
-        """When taskbar is on the left (work_area.left > 0), popup goes to the left edge."""
+        """When taskbar is on the left (work.left > monitor.left), popup goes to the left edge."""
         x, y = self._call(60, 0, 1920, 1080, _BASELINE_DPI, 340, 400)
         self.assertEqual(x, 60 + 12)
         self.assertEqual(y, 1080 - 400 - 12)
 
     def test_taskbar_on_top(self):
-        """When taskbar is on top (work_area.top > 0), popup goes to the top edge."""
+        """When taskbar is on top (work.top > monitor.top), popup goes to the top edge."""
         x, y = self._call(0, 40, 1920, 1080, _BASELINE_DPI, 340, 400)
         self.assertEqual(x, 1920 - 340 - 12)
         self.assertEqual(y, 40 + 12)
@@ -594,15 +638,64 @@ class TestTrayPosition(unittest.TestCase):
         self.assertLessEqual(physical_x + pw, work_right)
         self.assertLessEqual(physical_y + ph, work_bottom)
 
+    def test_secondary_monitor_offset_not_mistaken_for_left_taskbar(self):
+        """A monitor whose virtual origin isn't (0, 0) must not be misread as having a left taskbar.
+
+        Regression test for the SPI_GETWORKAREA-based bug: work_area.left > 0
+        used to be read as "taskbar on the left" even when it was really just
+        the monitor's virtual-desktop offset (e.g. a monitor placed to the
+        right of another one, with no taskbar of its own) - because
+        SPI_GETWORKAREA only ever reports the primary monitor and the old
+        code compared its left edge against 0 instead of against that
+        monitor's own bounds.
+        """
+        # Second monitor occupies virtual x 1920..3840, no taskbar on it.
+        x, y = self._call(
+            1920, 0, 3840, 1080, _BASELINE_DPI, 340, 400,
+            mon_rect=(1920, 0, 3840, 1080),
+        )
+        self.assertEqual(x, 3840 - 340 - 12)
+        self.assertEqual(y, 1080 - 400 - 12)
+
+    def test_finds_monitor_via_tray_window_center(self):
+        """When Shell_TrayWnd is found, its center point is passed to MonitorFromPoint."""
+        popup = object.__new__(UsagePopup)
+        popup._popup_hwnd = 12345
+        captured = {}
+
+        def get_window_rect(_hwnd, rect_ptr):
+            rect = ctypes.cast(rect_ptr, ctypes.POINTER(ctypes.wintypes.RECT)).contents
+            rect.left, rect.top, rect.right, rect.bottom = 100, 200, 300, 400
+            return 1
+
+        def monitor_from_point(point, _flags):
+            captured['x'], captured['y'] = point.x, point.y
+            return 1
+
+        with patch('ctypes.windll.user32.FindWindowW', return_value=42), \
+             patch('ctypes.windll.user32.GetWindowRect', side_effect=get_window_rect), \
+             patch('ctypes.windll.user32.MonitorFromPoint', side_effect=monitor_from_point), \
+             patch('ctypes.windll.user32.GetMonitorInfoW', side_effect=_monitor_info_stub((0, 0, 1920, 1040))), \
+             patch('ctypes.windll.user32.GetDpiForWindow', return_value=_BASELINE_DPI):
+            popup._tray_position(340, 400)
+
+        self.assertEqual((captured['x'], captured['y']), (200, 300))
+
 
 # ---------------------------------------------------------------------------
 # _resize_and_position
 # ---------------------------------------------------------------------------
 
 class TestResizeAndPosition(unittest.TestCase):
-    """Tests for UsagePopup._resize_and_position - DPI-aware resize."""
+    """Tests for UsagePopup._resize_and_position - DPI-aware resize.
 
-    def _call(self, css_height, dpi):
+    pywebview 6.x scales both resize() and move() internally, so
+    _resize_and_position passes resize() the unscaled logical WIDTH/height
+    directly - only _tray_position's physical-pixel arithmetic (exercised
+    via move()) depends on DPI.
+    """
+
+    def _call(self, css_height, dpi, work_rect=(0, 0, 1920, 1040)):
         """Call _resize_and_position and capture the resize/move arguments."""
         popup = object.__new__(UsagePopup)
         popup.WIDTH = UsagePopup.WIDTH
@@ -611,36 +704,20 @@ class TestResizeAndPosition(unittest.TestCase):
         mock_window = MagicMock()
         popup._window = mock_window
 
-        def set_rect(_code, _size, rect_ptr, _flags):
-            import ctypes
-            import ctypes.wintypes
-            rect = ctypes.cast(rect_ptr, ctypes.POINTER(ctypes.wintypes.RECT)).contents
-            rect.left = 0
-            rect.top = 0
-            rect.right = 1920
-            rect.bottom = 1040
-            return 1
-
         with patch('ctypes.windll.user32.GetDpiForWindow', return_value=dpi), \
-             patch('ctypes.windll.user32.SystemParametersInfoW', side_effect=set_rect):
+             patch('ctypes.windll.user32.FindWindowW', return_value=0), \
+             patch('ctypes.windll.user32.MonitorFromPoint', return_value=1), \
+             patch('ctypes.windll.user32.GetMonitorInfoW', side_effect=_monitor_info_stub(work_rect)):
             popup._resize_and_position(css_height)
 
         return mock_window
 
-    def test_resize_at_100_percent(self):
-        """At 100% DPI, resize uses CSS pixels directly (scale=1)."""
-        mock = self._call(500, 96)
-        mock.resize.assert_called_once_with(340, 500)
-
-    def test_resize_at_125_percent(self):
-        """At 125% DPI, resize multiplies by scale factor for physical pixels."""
-        mock = self._call(500, 120)
-        mock.resize.assert_called_once_with(int(340 * 1.25), int(500 * 1.25))
-
-    def test_resize_at_150_percent(self):
-        """At 150% DPI, resize multiplies by scale factor for physical pixels."""
-        mock = self._call(500, 144)
-        mock.resize.assert_called_once_with(int(340 * 1.5), int(500 * 1.5))
+    def test_resize_uses_logical_pixels_regardless_of_dpi(self):
+        """resize() always receives WIDTH/height unscaled - pywebview scales it internally."""
+        for dpi in (96, 120, 144):
+            with self.subTest(dpi=dpi):
+                mock = self._call(500, dpi)
+                mock.resize.assert_called_once_with(340, 500)
 
     def test_move_receives_logical_coordinates(self):
         """move() receives logical coordinates regardless of DPI."""
@@ -651,20 +728,22 @@ class TestResizeAndPosition(unittest.TestCase):
         self.assertLess(y, 1040)
 
     def test_window_fits_within_work_area_at_125_percent(self):
-        """After resize + move at 125% DPI, the window stays within the work area."""
+        """After resize + move at 125% DPI, the window's physical footprint stays within the work area."""
         dpi = 120
         scale = dpi / _BASELINE_DPI
         mock = self._call(500, dpi)
         resize_w, resize_h = mock.resize.call_args[0]
         move_x, move_y = mock.move.call_args[0]
-        # move() scales logical to physical internally
+        # resize() args are logical; move() scales logical to physical internally
+        physical_w = resize_w * scale
+        physical_h = resize_h * scale
         physical_x = move_x * scale
         physical_y = move_y * scale
-        self.assertLessEqual(physical_x + resize_w, 1920)
-        self.assertLessEqual(physical_y + resize_h, 1040)
+        self.assertLessEqual(physical_x + physical_w, 1920)
+        self.assertLessEqual(physical_y + physical_h, 1040)
 
     def test_falls_back_to_system_dpi_when_window_dpi_unavailable(self):
-        """When GetDpiForWindow returns 0, GetDpiForSystem is used as fallback."""
+        """When GetDpiForWindow returns 0, GetDpiForSystem is used as fallback for the move() math."""
         popup = object.__new__(UsagePopup)
         popup.WIDTH = UsagePopup.WIDTH
         popup._popup_hwnd = 12345
@@ -672,23 +751,15 @@ class TestResizeAndPosition(unittest.TestCase):
         mock_window = MagicMock()
         popup._window = mock_window
 
-        def set_rect(_code, _size, rect_ptr, _flags):
-            import ctypes
-            import ctypes.wintypes
-            rect = ctypes.cast(rect_ptr, ctypes.POINTER(ctypes.wintypes.RECT)).contents
-            rect.left = 0
-            rect.top = 0
-            rect.right = 1920
-            rect.bottom = 1040
-            return 1
-
         with patch('ctypes.windll.user32.GetDpiForWindow', return_value=0), \
              patch('ctypes.windll.user32.GetDpiForSystem', return_value=144) as mock_sys_dpi, \
-             patch('ctypes.windll.user32.SystemParametersInfoW', side_effect=set_rect):
+             patch('ctypes.windll.user32.FindWindowW', return_value=0), \
+             patch('ctypes.windll.user32.MonitorFromPoint', return_value=1), \
+             patch('ctypes.windll.user32.GetMonitorInfoW', side_effect=_monitor_info_stub((0, 0, 1920, 1040))):
             popup._resize_and_position(500)
 
         mock_sys_dpi.assert_called()
-        mock_window.resize.assert_called_once_with(int(340 * 1.5), int(500 * 1.5))
+        mock_window.resize.assert_called_once_with(340, 500)
 
 
 if __name__ == '__main__':
